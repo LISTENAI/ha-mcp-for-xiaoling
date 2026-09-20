@@ -1,0 +1,94 @@
+"""Home Assistant LLM API helpers used by the Xiaoling Connector."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
+from voluptuous_openapi import convert
+
+from homeassistant.components import conversation
+from homeassistant.core import Context, HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import llm
+
+from .const import DOMAIN, INTEGRATION_VERSION, SERVER_NAME
+
+
+def _format_tool(
+    tool: llm.Tool,
+    custom_serializer: Callable[[Any], Any] | None,
+) -> dict[str, Any]:
+    """Convert a Home Assistant LLM tool to a Connector tool."""
+    try:
+        input_schema = convert(tool.parameters, custom_serializer=custom_serializer)
+    except (TypeError, ValueError, HomeAssistantError):
+        input_schema = {"type": "object", "properties": {}}
+
+    properties = input_schema.get("properties")
+    if not isinstance(properties, dict):
+        properties = {}
+
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": properties,
+    }
+    required = input_schema.get("required")
+    if isinstance(required, list):
+        schema["required"] = required
+
+    return {
+        "name": tool.name[:64],
+        "description": (tool.description or "")[:2000],
+        "inputSchema": schema,
+    }
+
+
+async def async_get_llm_api(hass: HomeAssistant) -> llm.APIInstance:
+    """Return the Assist LLM API used as the local MCP Server."""
+    return await llm.async_get_api(
+        hass,
+        llm.LLM_API_ASSIST,
+        llm.LLMContext(
+            platform=DOMAIN,
+            context=Context(),
+            language="*",
+            assistant=conversation.DOMAIN,
+            device_id=None,
+        ),
+    )
+
+
+async def async_build_server(hass: HomeAssistant) -> dict[str, Any]:
+    """Build the Home Assistant server manifest for server_sync."""
+    try:
+        llm_api = await async_get_llm_api(hass)
+        tools = [_format_tool(tool, llm_api.custom_serializer) for tool in llm_api.tools]
+        status = "READY"
+        description = "Home Assistant MCP Server"
+    except HomeAssistantError:
+        tools = []
+        status = "ERROR"
+        description = "Home Assistant MCP Server is unavailable"
+
+    return {
+        "name": SERVER_NAME,
+        "version": INTEGRATION_VERSION,
+        "capabilities": {"tools": {"listChanged": True}},
+        "transport_type": "http",
+        "description": description,
+        "status": status,
+        "tools": tools,
+    }
+
+
+async def async_call_tool(
+    hass: HomeAssistant,
+    tool_name: str,
+    arguments: dict[str, Any] | None,
+) -> Any:
+    """Call a Home Assistant LLM tool and return the raw result."""
+    llm_api = await async_get_llm_api(hass)
+    return await llm_api.async_call_tool(
+        llm.ToolInput(tool_name=tool_name, tool_args=arguments or {})
+    )

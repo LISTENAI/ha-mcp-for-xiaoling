@@ -1,0 +1,25 @@
+{
+  "config": {
+    "step": {
+      "add_device": {
+        "title": "配置小聆MCP接入点",
+        "description": "输入小程序生成的配对码。配对成功后，该设备会连接独立的 MCP Connector。",
+        "data": {
+          "pairing_code": "配对码"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "无法连接小聆MCP服务",
+      "invalid_auth": "配对码无效、过期或已使用",
+      "invalid_pairing_code": "请输入配对码",
+      "api_error": "小聆MCP服务返回错误",
+      "already_configured": "该设备已经关联",
+      "connector_limit": "该设备的 Connector 数量已达上限，请先在小程序中解除不需要的绑定"
+    },
+    "abort": {
+      "already_configured": "该集成已经配置",
+      "device_added": "设备已关联"
+    }
+  }
+}

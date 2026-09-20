@@ -1,0 +1,19 @@
+{
+  "domain": "xiaoling_mcp",
+  "name": "MCP Server for xiaoling",
+  "version": "0.2.0",
+  "config_flow": true,
+  "integration_type": "device",
+  "iot_class": "cloud_push",
+  "requirements": [
+    "voluptuous-openapi"
+  ],
+  "dependencies": [
+    "conversation"
+  ],
+  "codeowners": [
+    "@your-github-name"
+  ],
+  "documentation": "https://github.com/your-github-name/ha-mcp-for-xiaoling",
+  "issue_tracker": "https://github.com/your-github-name/ha-mcp-for-xiaoling/issues"
+}
