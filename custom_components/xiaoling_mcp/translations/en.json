@@ -3,9 +3,10 @@
     "step": {
       "add_device": {
         "title": "Configure Xiaoling MCP endpoint",
-        "description": "Enter the pairing code from the Xiaoling mini program. After pairing, this device connects its own MCP Connector.",
+        "description": "Enter the pairing code from the Xiaoling mini program and select the MCP Servers to expose. After pairing, this device connects its own MCP Connector.",
         "data": {
-          "pairing_code": "Pairing code"
+          "pairing_code": "Pairing code",
+          "llm_hass_api": "MCP Servers"
         }
       }
     },
@@ -13,6 +14,8 @@
       "cannot_connect": "Unable to connect to the Xiaoling MCP service",
       "invalid_auth": "The pairing code is invalid, expired, or already used",
       "invalid_pairing_code": "Enter a pairing code",
+      "llm_api_required": "Select at least one MCP Server",
+      "invalid_llm_api": "The selected MCP Server is unavailable",
       "api_error": "The Xiaoling MCP service returned an error",
       "already_configured": "This device is already linked",
       "connector_limit": "This device already has the maximum number of connectors. Revoke an unused binding in the mini program first."

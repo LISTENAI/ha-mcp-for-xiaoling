@@ -6,6 +6,7 @@ import asyncio
 from datetime import UTC, datetime
 import json
 from typing import Any
+from uuid import UUID
 
 from aiohttp import WSMsgType, web
 
@@ -43,6 +44,24 @@ async def handle_exchange(request: web.Request) -> web.Response:
     body = await request.json()
     print(f"POST {request.path}: {body}", flush=True)
     pairing_code = str(body.get("pairing_code", "")).strip().upper()
+    connector_instance_id = body.get("connector_instance_id")
+    if not isinstance(connector_instance_id, str):
+        return web.json_response(
+            {"code": "BAD_REQUEST", "message": "invalid connector_instance_id"},
+            status=400,
+        )
+    try:
+        parsed_connector_instance_id = UUID(connector_instance_id)
+    except ValueError:
+        return web.json_response(
+            {"code": "BAD_REQUEST", "message": "invalid connector_instance_id"},
+            status=400,
+        )
+    if str(parsed_connector_instance_id) != connector_instance_id:
+        return web.json_response(
+            {"code": "BAD_REQUEST", "message": "invalid connector_instance_id"},
+            status=400,
+        )
     pairing = DEVICES.get(pairing_code)
     if pairing is None:
         return web.json_response(
@@ -51,6 +70,74 @@ async def handle_exchange(request: web.Request) -> web.Response:
         )
     return web.json_response(
         {"code": "SUCCESS", "message": "success", "data": pairing}
+    )
+
+
+async def handle_update_connector_name(request: web.Request) -> web.Response:
+    """Update one Connector's cloud display name."""
+    connector_id = request.match_info["connector_id"]
+    body = await request.json()
+    print(f"PUT {request.path}: {body}", flush=True)
+    token = body.get("token")
+    connector_name = body.get("connector_name")
+    protocol_version = body.get("protocol_version")
+    if (
+        not isinstance(token, str)
+        or not token
+        or not connector_id
+        or not isinstance(connector_name, str)
+        or not 1 <= len(connector_name) <= 24
+        or len(connector_id) > 36
+        or protocol_version != 1
+    ):
+        return web.json_response(
+            {"code": "FST_ERR_VALIDATION", "message": "invalid request"},
+            status=400,
+        )
+    pairing = TOKENS.get(token)
+    if pairing is None or pairing["connector_id"] != connector_id:
+        return web.json_response(
+            {"code": "MCP_BINDING_REVOKED", "message": "binding revoked"},
+            status=401,
+        )
+    pairing["connector_name"] = connector_name
+    return web.json_response({"code": "SUCCESS", "message": "success"})
+
+
+async def handle_revoke(request: web.Request) -> web.Response:
+    """Revoke one Connector binding."""
+    body = await request.json()
+    print(f"POST {request.path}: {body}", flush=True)
+    token = body.get("token")
+    connector_id = body.get("connector_id")
+    protocol_version = body.get("protocol_version")
+    if (
+        not isinstance(token, str)
+        or not token
+        or not isinstance(connector_id, str)
+        or not connector_id
+        or protocol_version != 1
+    ):
+        return web.json_response(
+            {"code": "BAD_REQUEST", "message": "invalid revoke request"},
+            status=400,
+        )
+    pairing = TOKENS.get(token)
+    if pairing is None or pairing["connector_id"] != connector_id:
+        return web.json_response(
+            {"code": "MCP_BINDING_REVOKED", "message": "binding revoked"},
+            status=401,
+        )
+    return web.json_response(
+        {
+            "code": "SUCCESS",
+            "message": "success",
+            "data": {
+                "binding_id": pairing["binding_id"],
+                "connector_id": connector_id,
+                "status": "REVOKED",
+            },
+        }
     )
 
 
@@ -210,6 +297,11 @@ def create_app() -> web.Application:
     app = web.Application()
     app["connections"] = {}
     app.router.add_post("/external/mcp/auth/exchange", handle_exchange)
+    app.router.add_put(
+        "/external/mcp/connectors/{connector_id}",
+        handle_update_connector_name,
+    )
+    app.router.add_post("/external/mcp/auth/revoke", handle_revoke)
     app.router.add_get("/v1/mcp/connector", handle_connector)
     app.router.add_get("/debug/connections", handle_status)
     app.router.add_post("/debug/call", handle_debug_call)

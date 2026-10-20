@@ -5,13 +5,16 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 import aiohttp
 
 from .const import (
     CONNECTOR_TYPE,
+    CONNECTORS_PATH,
     EXCHANGE_PATH,
     PROTOCOL_VERSION,
+    REVOKE_PATH,
     USER_AGENT,
     XIAOLING_API_BASE,
 )
@@ -27,6 +30,10 @@ class CannotConnect(XiaolingMcpError):
 
 class InvalidAuth(XiaolingMcpError):
     """The pairing code or authentication is invalid."""
+
+
+class BindingRevoked(XiaolingMcpError):
+    """The Connector binding is already revoked."""
 
 
 class ConnectorLimit(XiaolingMcpError):
@@ -55,12 +62,17 @@ class XiaolingMcpApi:
     def __init__(self, session: aiohttp.ClientSession) -> None:
         self._session = session
 
-    async def async_exchange(self, pairing_code: str) -> PairingResult:
-        """Exchange a pairing code for a Connector token."""
+    async def async_exchange(
+        self,
+        pairing_code: str,
+        connector_instance_id: str,
+    ) -> PairingResult:
+        """Exchange a pairing code using the saved Connector instance identity."""
         payload = await self._async_request(
             EXCHANGE_PATH,
             {
                 "pairing_code": pairing_code,
+                "connector_instance_id": connector_instance_id,
                 "protocol_version": PROTOCOL_VERSION,
             },
         )
@@ -94,14 +106,55 @@ class XiaolingMcpApi:
             product_id=product_id,
         )
 
+    async def async_update_connector_name(
+        self,
+        api_token: str,
+        connector_id: str,
+        connector_name: str,
+    ) -> None:
+        """Update the cloud display name for one Connector."""
+        if not api_token:
+            raise ApiError("Connector token is required")
+        if not connector_id or len(connector_id) > 36:
+            raise ApiError("Connector ID must be between 1 and 36 characters")
+        if not connector_name or len(connector_name) > 24:
+            raise ApiError("Connector name must be between 1 and 24 characters")
+
+        await self._async_request(
+            f"{CONNECTORS_PATH}/{quote(connector_id, safe='')}",
+            {
+                "token": api_token,
+                "connector_name": connector_name,
+                "protocol_version": PROTOCOL_VERSION,
+            },
+            method="PUT",
+        )
+
+    async def async_revoke(self, api_token: str, connector_id: str) -> None:
+        """Release one Connector binding. An already revoked binding is success."""
+        try:
+            await self._async_request(
+                REVOKE_PATH,
+                {
+                    "token": api_token,
+                    "connector_id": connector_id,
+                    "protocol_version": PROTOCOL_VERSION,
+                },
+            )
+        except BindingRevoked:
+            return
+
     async def _async_request(
         self,
         path: str,
         payload: dict[str, Any],
+        *,
+        method: str = "POST",
     ) -> dict[str, Any]:
-        """Send a pairing request to Xiaoling."""
+        """Send an authenticated API request to Xiaoling."""
         try:
-            async with self._session.post(
+            async with self._session.request(
+                method,
                 f"{XIAOLING_API_BASE}{path}",
                 json=payload,
                 headers={
@@ -113,6 +166,8 @@ class XiaolingMcpApi:
             ) as response:
                 data = await _async_parse_json(response)
                 code = data.get("code") if isinstance(data, dict) else None
+                if code == "MCP_BINDING_REVOKED":
+                    raise BindingRevoked
                 if response.status in (401, 403) or code == "MCP_PAIRING_EXPIRED":
                     raise InvalidAuth
                 if response.status == 409 or code == "MCP_CONNECTOR_LIMIT":
@@ -126,7 +181,7 @@ class XiaolingMcpApi:
                 if not isinstance(data, dict):
                     raise ApiError("MCP service returned a non-object response")
                 return data
-        except (InvalidAuth, ConnectorLimit, ApiError):
+        except (InvalidAuth, BindingRevoked, ConnectorLimit, ApiError):
             raise
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             raise CannotConnect from err

@@ -44,11 +44,14 @@ def _format_tool(
     }
 
 
-async def async_get_llm_api(hass: HomeAssistant) -> llm.APIInstance:
-    """Return the Assist LLM API used as the local MCP Server."""
+async def async_get_llm_api(
+    hass: HomeAssistant,
+    api_ids: list[str] | None = None,
+) -> llm.APIInstance:
+    """Return the selected Home Assistant LLM APIs as one API instance."""
     return await llm.async_get_api(
         hass,
-        llm.LLM_API_ASSIST,
+        api_ids or llm.LLM_API_ASSIST,
         llm.LLMContext(
             platform=DOMAIN,
             context=Context(),
@@ -59,10 +62,13 @@ async def async_get_llm_api(hass: HomeAssistant) -> llm.APIInstance:
     )
 
 
-async def async_build_server(hass: HomeAssistant) -> dict[str, Any]:
+async def async_build_server(
+    hass: HomeAssistant,
+    api_ids: list[str] | None = None,
+) -> dict[str, Any]:
     """Build the Home Assistant server manifest for server_sync."""
     try:
-        llm_api = await async_get_llm_api(hass)
+        llm_api = await async_get_llm_api(hass, api_ids)
         tools = [_format_tool(tool, llm_api.custom_serializer) for tool in llm_api.tools]
         status = "READY"
         description = "Home Assistant MCP Server"
@@ -84,11 +90,12 @@ async def async_build_server(hass: HomeAssistant) -> dict[str, Any]:
 
 async def async_call_tool(
     hass: HomeAssistant,
+    api_ids: list[str] | None,
     tool_name: str,
     arguments: dict[str, Any] | None,
 ) -> Any:
-    """Call a Home Assistant LLM tool and return the raw result."""
-    llm_api = await async_get_llm_api(hass)
+    """Call a tool from the selected Home Assistant LLM APIs."""
+    llm_api = await async_get_llm_api(hass, api_ids)
     return await llm_api.async_call_tool(
         llm.ToolInput(tool_name=tool_name, tool_args=arguments or {})
     )

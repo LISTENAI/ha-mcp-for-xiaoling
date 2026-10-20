@@ -10,11 +10,14 @@ CONF_DEVICE_NAME = "device_name"
 CONF_API_TOKEN = "api_token"
 CONF_BINDING_ID = "binding_id"
 CONF_CONNECTOR_ID = "connector_id"
+CONF_CONNECTOR_INSTANCE_ID = "connector_instance_id"
 CONF_PRODUCT_ID = "product_id"
 CONF_MANIFEST_VERSION = "manifest_version"
 
 XIAOLING_API_BASE = "https://staging-api.listenai.com"
 EXCHANGE_PATH = "/external/mcp/auth/exchange"
+REVOKE_PATH = "/external/mcp/auth/revoke"
+CONNECTORS_PATH = "/external/mcp/connectors"
 CONNECTOR_WS_PATH = "/v1/mcp/connector"
 
 PROTOCOL_VERSION = 1
@@ -24,6 +27,7 @@ SERVER_NAME = "Home Assistant"
 MAX_RECONNECT_DELAY = 30
 HELLO_TIMEOUT = 15
 DEFAULT_HEARTBEAT_SECONDS = 30
+DEFAULT_HEARTBEAT_ACK_TIMEOUT_SECONDS = 10
 DEFAULT_MAX_FRAME_SIZE = 655360
 DEFAULT_CALL_TIMEOUT = 30
 

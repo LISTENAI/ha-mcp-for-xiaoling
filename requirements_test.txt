@@ -1,0 +1,3 @@
+# Test dependencies for the local Home Assistant integration suite.
+homeassistant==2026.8.3
+voluptuous-openapi==0.4.1

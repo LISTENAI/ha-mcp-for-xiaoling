@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
+from uuid import uuid4
 
 import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
+from homeassistant.const import CONF_LLM_HASS_API
+from homeassistant.helpers import llm
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.selector import (
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+)
 
 from .api import (
     ApiError,
@@ -21,6 +30,7 @@ from .const import (
     CONF_API_TOKEN,
     CONF_BINDING_ID,
     CONF_CONNECTOR_ID,
+    CONF_CONNECTOR_INSTANCE_ID,
     CONF_DEVICE_ID,
     CONF_DEVICE_NAME,
     CONF_DEVICES,
@@ -35,6 +45,26 @@ from .device import register_device
 _LOGGER = logging.getLogger(__name__)
 
 
+def _get_connector_instance_id(
+    hass: Any,
+    entry: config_entries.ConfigEntry,
+) -> str:
+    """Return and persist the integration-wide Connector instance ID."""
+    connector_instance_id = entry.data.get(CONF_CONNECTOR_INSTANCE_ID)
+    if isinstance(connector_instance_id, str) and connector_instance_id:
+        return connector_instance_id
+
+    connector_instance_id = str(uuid4())
+    hass.config_entries.async_update_entry(
+        entry,
+        data={
+            **entry.data,
+            CONF_CONNECTOR_INSTANCE_ID: connector_instance_id,
+        },
+    )
+    return connector_instance_id
+
+
 class XiaolingMcpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle the integration setup and device pairing flow."""
 
@@ -42,7 +72,7 @@ class XiaolingMcpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(
         self,
-        user_input: dict[str, str] | None = None,
+        user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
         """Create the integration or open the add-device flow."""
         entries = self.hass.config_entries.async_entries(DOMAIN)
@@ -59,20 +89,48 @@ class XiaolingMcpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_add_device(
         self,
-        user_input: dict[str, str] | None = None,
+        user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Pair a device, then connect that device's Connector WebSocket."""
+        """Pair a device, then connect its selected MCP server APIs."""
         errors: dict[str, str] = {}
         entry = self._config_entry
+        llm_apis = {api.id: api.name for api in llm.async_get_apis(self.hass)}
+        default_api_ids = (
+            [llm.LLM_API_ASSIST]
+            if llm.LLM_API_ASSIST in llm_apis
+            else list(llm_apis)[:1]
+        )
+        selected_api_ids_for_form = default_api_ids
 
         if user_input is not None:
-            pairing_code = user_input[CONF_PAIRING_CODE].strip()
+            pairing_code = str(user_input.get(CONF_PAIRING_CODE, "")).strip()
+            selected_api_ids = user_input.get(CONF_LLM_HASS_API, default_api_ids)
+            if not isinstance(selected_api_ids, list):
+                selected_api_ids = list(selected_api_ids) if isinstance(
+                    selected_api_ids, tuple
+                ) else []
+            selected_api_ids = [
+                api_id
+                for api_id in selected_api_ids
+                if isinstance(api_id, str) and api_id
+            ]
+            selected_api_ids_for_form = [
+                api_id for api_id in selected_api_ids if api_id in llm_apis
+            ] or default_api_ids
             if not pairing_code:
                 errors["base"] = "invalid_pairing_code"
+            elif not selected_api_ids:
+                errors[CONF_LLM_HASS_API] = "llm_api_required"
+            elif any(api_id not in llm_apis for api_id in selected_api_ids):
+                errors[CONF_LLM_HASS_API] = "invalid_llm_api"
             else:
                 api = XiaolingMcpApi(async_get_clientsession(self.hass))
+                connector_instance_id = _get_connector_instance_id(self.hass, entry)
                 try:
-                    pairing = await api.async_exchange(pairing_code)
+                    pairing = await api.async_exchange(
+                        pairing_code,
+                        connector_instance_id,
+                    )
                 except CannotConnect:
                     errors["base"] = "cannot_connect"
                 except InvalidAuth:
@@ -98,6 +156,7 @@ class XiaolingMcpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             CONF_BINDING_ID: pairing.binding_id,
                             CONF_CONNECTOR_ID: pairing.connector_id,
                             CONF_PRODUCT_ID: pairing.product_id,
+                            CONF_LLM_HASS_API: selected_api_ids,
                             CONF_MANIFEST_VERSION: 0,
                         }
                         devices.append(device)
@@ -125,6 +184,18 @@ class XiaolingMcpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Required(CONF_PAIRING_CODE): vol.All(
                         str,
                         vol.Length(min=1),
+                    ),
+                    vol.Optional(
+                        CONF_LLM_HASS_API,
+                        default=selected_api_ids_for_form,
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                SelectOptionDict(label=name, value=api_id)
+                                for api_id, name in llm_apis.items()
+                            ],
+                            multiple=True,
+                        )
                     ),
                 }
             ),

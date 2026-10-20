@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 import json
 import logging
@@ -12,8 +12,10 @@ from urllib.parse import urlencode
 
 import aiohttp
 
+from homeassistant.const import CONF_LLM_HASS_API
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import llm
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
@@ -25,6 +27,7 @@ from .const import (
     CONF_MANIFEST_VERSION,
     CONNECTOR_WS_PATH,
     DEFAULT_CALL_TIMEOUT,
+    DEFAULT_HEARTBEAT_ACK_TIMEOUT_SECONDS,
     DEFAULT_HEARTBEAT_SECONDS,
     DEFAULT_MAX_FRAME_SIZE,
     HELLO_TIMEOUT,
@@ -53,20 +56,34 @@ class XiaolingConnector:
         hass: HomeAssistant,
         device: Mapping[str, Any],
         on_manifest_version: Callable[[int], None] | None = None,
+        on_revoked: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._hass = hass
         self._device_id = str(device[CONF_DEVICE_ID])
         self._api_token = str(device[CONF_API_TOKEN])
         self._binding_id = str(device[CONF_BINDING_ID])
         self._connector_id = str(device[CONF_CONNECTOR_ID])
+        selected_api_ids = device.get(
+            CONF_LLM_HASS_API,
+            [llm.LLM_API_ASSIST],
+        )
+        self._llm_api_ids = (
+            selected_api_ids
+            if isinstance(selected_api_ids, list) and selected_api_ids
+            else [llm.LLM_API_ASSIST]
+        )
         self._manifest_version = int(device.get(CONF_MANIFEST_VERSION) or 0)
         self._on_manifest_version = on_manifest_version
+        self._on_revoked = on_revoked
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._session_id: str | None = None
         self._connection_epoch: int | None = None
         self._heartbeat_seconds = DEFAULT_HEARTBEAT_SECONDS
+        self._heartbeat_ack_event = asyncio.Event()
+        self._heartbeat_waiting_for_ack = False
+        self._revoked = False
         self._max_frame_size = DEFAULT_MAX_FRAME_SIZE
         self._frame_id = 0
         self._synced = False
@@ -187,11 +204,7 @@ class XiaolingConnector:
                 if msg.type in _CLOSE_RETRY:
                     extra = str(msg.extra or "")
                     if extra == "BINDING_REVOKED" or "revoked" in extra.lower():
-                        _LOGGER.warning(
-                            "Xiaoling Connector %s was revoked; stopping reconnect",
-                            self._connector_id,
-                        )
-                        self._stop.set()
+                        await self._async_handle_revoke(extra)
                     return
         finally:
             hello_watchdog.cancel()
@@ -216,13 +229,42 @@ class XiaolingConnector:
             await self._async_close_ws()
 
     async def _async_heartbeat(self) -> None:
-        """Send business heartbeats at the interval from hello ack."""
+        """Send an immediate heartbeat, then keep the session alive."""
+        first_heartbeat = True
         while not self._stop.is_set():
-            await asyncio.sleep(self._heartbeat_seconds)
+            if not first_heartbeat:
+                await asyncio.sleep(self._heartbeat_seconds)
+            first_heartbeat = False
+            if self._stop.is_set():
+                return
+            self._heartbeat_ack_event.clear()
+            self._heartbeat_waiting_for_ack = True
             try:
                 await self._async_send("heartbeat", {})
-            except (ConnectionError, aiohttp.ClientError):
+                await asyncio.wait_for(
+                    self._heartbeat_ack_event.wait(),
+                    timeout=DEFAULT_HEARTBEAT_ACK_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                _LOGGER.warning(
+                    "Xiaoling Connector %s heartbeat ack timed out after %s "
+                    "seconds; reconnecting",
+                    self._connector_id,
+                    DEFAULT_HEARTBEAT_ACK_TIMEOUT_SECONDS,
+                )
+                await self._async_close_ws()
                 return
+            except (ConnectionError, aiohttp.ClientError) as err:
+                if not self._stop.is_set():
+                    _LOGGER.warning(
+                        "Xiaoling Connector %s heartbeat failed; reconnecting: %s",
+                        self._connector_id,
+                        err,
+                    )
+                    await self._async_close_ws()
+                return
+            finally:
+                self._heartbeat_waiting_for_ack = False
 
     async def _async_handle_message(self, raw: str) -> None:
         """Dispatch one inbound JSON frame."""
@@ -249,6 +291,8 @@ class XiaolingConnector:
             await self._async_send("heartbeat_ack", {})
             return
         if msg_type == "heartbeat_ack":
+            if self._heartbeat_waiting_for_ack:
+                self._heartbeat_ack_event.set()
             return
         if msg_type == "server_refresh":
             await self._async_sync_servers()
@@ -257,13 +301,7 @@ class XiaolingConnector:
             await self._async_handle_call(payload)
             return
         if msg_type == "revoke":
-            _LOGGER.warning(
-                "Xiaoling Connector %s received revoke: %s",
-                self._connector_id,
-                payload.get("reason"),
-            )
-            self._stop.set()
-            await self._async_close_ws()
+            await self._async_handle_revoke(payload.get("reason"))
             return
         if msg_type == "error":
             _LOGGER.error(
@@ -273,6 +311,23 @@ class XiaolingConnector:
             )
             return
         _LOGGER.debug("Ignoring Xiaoling Connector message type %s", msg_type)
+
+    async def _async_handle_revoke(self, reason: Any) -> None:
+        """Stop the connector and notify the integration to remove the device."""
+        if self._revoked:
+            return
+        self._revoked = True
+        self._stop.set()
+        _LOGGER.warning(
+            "Xiaoling Connector %s was revoked: %s",
+            self._connector_id,
+            reason,
+        )
+        try:
+            await self._async_close_ws()
+        finally:
+            if self._on_revoked is not None:
+                await self._on_revoked(self._device_id)
 
     async def _async_handle_ack(
         self,
@@ -306,7 +361,7 @@ class XiaolingConnector:
 
     async def _async_sync_servers(self) -> None:
         """Send the current Home Assistant MCP Server list."""
-        server = await async_build_server(self._hass)
+        server = await async_build_server(self._hass, self._llm_api_ids)
         self._manifest_version += 1
         if self._on_manifest_version is not None:
             self._on_manifest_version(self._manifest_version)
@@ -338,7 +393,12 @@ class XiaolingConnector:
         }
         try:
             result = await asyncio.wait_for(
-                async_call_tool(self._hass, tool_name, arguments),
+                async_call_tool(
+                    self._hass,
+                    self._llm_api_ids,
+                    tool_name,
+                    arguments,
+                ),
                 timeout=timeout,
             )
             result_payload["status"] = "SUCCESS"
@@ -407,9 +467,15 @@ class XiaolingConnector:
 class ConnectorManager:
     """Start and stop one Connector per paired device."""
 
-    def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry_id: str,
+        on_revoked: Callable[[str], Awaitable[None]],
+    ) -> None:
         self._hass = hass
         self._entry_id = entry_id
+        self._on_revoked = on_revoked
         self._connectors: dict[str, XiaolingConnector] = {}
 
     def start_device(self, device: Mapping[str, Any]) -> XiaolingConnector:
@@ -426,10 +492,22 @@ class ConnectorManager:
             self._hass,
             device,
             on_manifest_version=_store_manifest,
+            on_revoked=self._async_handle_revoked,
         )
         self._connectors[device_id] = connector
         connector.start()
         return connector
+
+    async def _async_handle_revoked(self, device_id: str) -> None:
+        """Forget a revoked connector and remove its local device data."""
+        self._connectors.pop(device_id, None)
+        try:
+            await self._on_revoked(device_id)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception(
+                "Failed to remove revoked Xiaoling device %s locally",
+                device_id,
+            )
 
     async def async_stop_device(self, device_id: str) -> None:
         """Stop the Connector for one device."""

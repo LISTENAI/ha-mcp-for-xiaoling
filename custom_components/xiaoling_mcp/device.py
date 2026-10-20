@@ -17,6 +17,18 @@ from .const import (
 )
 
 
+def device_identifier(device_entry: dr.DeviceEntry) -> str | None:
+    """Return the Xiaoling device id stored on a registry device."""
+    return next(
+        (
+            identifier
+            for domain, identifier in device_entry.identifiers
+            if domain == DOMAIN
+        ),
+        None,
+    )
+
+
 def register_device(
     hass: HomeAssistant,
     entry: ConfigEntry,
