@@ -1,19 +1,19 @@
 {
   "domain": "xiaoling_mcp",
   "name": "MCP Server for xiaoling",
-  "version": "0.2.0",
-  "config_flow": true,
-  "integration_type": "device",
-  "iot_class": "cloud_push",
-  "requirements": [
-    "voluptuous-openapi"
-  ],
-  "dependencies": [
-    "conversation"
-  ],
   "codeowners": [
     "@LISTENAI"
   ],
+  "config_flow": true,
+  "dependencies": [
+    "conversation"
+  ],
   "documentation": "https://github.com/LISTENAI/ha-mcp-for-xiaoling",
-  "issue_tracker": "https://github.com/LISTENAI/ha-mcp-for-xiaoling/issues"
+  "integration_type": "device",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/LISTENAI/ha-mcp-for-xiaoling/issues",
+  "requirements": [
+    "voluptuous-openapi"
+  ],
+  "version": "0.2.0"
 }
