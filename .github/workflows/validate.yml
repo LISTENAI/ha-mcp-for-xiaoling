@@ -22,4 +22,4 @@ jobs:
 
   hassfest:
     name: Hassfest
-    uses: home-assistant/actions/hassfest@master
+    uses: home-assistant/actions/hassfest/.github/workflows/hassfest.yml@master
