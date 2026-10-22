@@ -17,6 +17,7 @@ from custom_components.xiaoling_mcp.const import (
 )
 from custom_components.xiaoling_mcp.connector import XiaolingConnector
 from custom_components.xiaoling_mcp.ha_mcp import (
+    _format_tool,
     async_build_server,
     async_call_tool,
     async_get_llm_api,
@@ -55,6 +56,21 @@ class LlmApiSelectionTests(unittest.IsolatedAsyncioTestCase):
         get_api.assert_awaited_once_with(hass, selected_api_ids)
         self.assertEqual(server["status"], "READY")
         self.assertEqual(server["tools"], [])
+
+    def test_tool_with_non_mapping_schema_uses_empty_schema(self) -> None:
+        unsupported = object()
+        tool = SimpleNamespace(
+            name="ExampleTool",
+            description="Example description",
+            parameters={},
+        )
+
+        result = _format_tool(tool, lambda _schema: unsupported)
+
+        self.assertEqual(
+            result["inputSchema"],
+            {"type": "object", "properties": {}},
+        )
 
     async def test_tool_call_uses_selected_api_ids(self) -> None:
         hass = object()

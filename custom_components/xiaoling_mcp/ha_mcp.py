@@ -24,6 +24,8 @@ def _format_tool(
         input_schema = convert(tool.parameters, custom_serializer=custom_serializer)
     except (TypeError, ValueError, HomeAssistantError):
         input_schema = {"type": "object", "properties": {}}
+    if not isinstance(input_schema, dict):
+        input_schema = {"type": "object", "properties": {}}
 
     properties = input_schema.get("properties")
     if not isinstance(properties, dict):
