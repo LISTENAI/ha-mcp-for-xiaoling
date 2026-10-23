@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from voluptuous_openapi import convert
+import probatio
 
 from homeassistant.components import conversation
 from homeassistant.core import Context, HomeAssistant
@@ -21,8 +21,12 @@ def _format_tool(
 ) -> dict[str, Any]:
     """Convert a Home Assistant LLM tool to a Connector tool."""
     try:
-        input_schema = convert(tool.parameters, custom_serializer=custom_serializer)
-    except (TypeError, ValueError, HomeAssistantError):
+        input_schema = probatio.to_openapi(
+            tool.parameters,
+            custom_serializer=custom_serializer,
+            openapi_version="3.1.0",
+        )
+    except (TypeError, ValueError, HomeAssistantError, probatio.SchemaError):
         input_schema = {"type": "object", "properties": {}}
     if not isinstance(input_schema, dict):
         input_schema = {"type": "object", "properties": {}}

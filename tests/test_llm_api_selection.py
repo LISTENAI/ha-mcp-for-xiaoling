@@ -6,6 +6,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import probatio
+
 from homeassistant.helpers import llm
 
 from custom_components.xiaoling_mcp.const import (
@@ -58,7 +60,7 @@ class LlmApiSelectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(server["tools"], [])
 
     def test_tool_with_non_mapping_schema_uses_empty_schema(self) -> None:
-        unsupported = object()
+        unsupported = probatio.UNSUPPORTED
         tool = SimpleNamespace(
             name="ExampleTool",
             description="Example description",
